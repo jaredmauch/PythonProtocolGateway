@@ -26,11 +26,12 @@ class modbus_rtu(modbus_base):
     def __init__(self, settings : SectionProxy, protocolSettings : protocol_settings = None):
         super().__init__(settings, protocolSettings=protocolSettings)
 
-        self.port = settings.get("port", "")
-        if not self.port:
+        # Store the original port specification from config (may be serial number format)
+        self.port_spec = settings.get("port", "")
+        if not self.port_spec:
             raise ValueError("Port is not set")
 
-        self.port = find_usb_serial_port(self.port)
+        self.port = find_usb_serial_port(self.port_spec)
         if not self.port:
             raise ValueError("Port is not valid / not found")
 
@@ -112,6 +113,61 @@ class modbus_rtu(modbus_base):
             self.client.write_register(register, value, **kwargs) #function code 0x06 writes to holding register
 
     def connect(self):
+        # If not connected or during reconnection, try to re-resolve USB port
+        # This handles cases where USB device disconnects and reconnects with a different port name
+        if not self.connected or self._needs_reconnection:
+            old_port = self.port
+            # Re-resolve port from serial number specification
+            new_port = find_usb_serial_port(self.port_spec)
+            if new_port and new_port != old_port:
+                self._log.info(f"USB port changed from {old_port} to {new_port}, updating client")
+                self.port = new_port
+                
+                # Close old client if it exists
+                old_client_str = old_port+"("+str(self.baudrate)+")"
+                with self._clients_lock:
+                    if old_client_str in modbus_base.clients:
+                        try:
+                            old_client = modbus_base.clients[old_client_str]
+                            if hasattr(old_client, 'close') and callable(old_client.close):
+                                old_client.close()
+                            del modbus_base.clients[old_client_str]
+                        except Exception as e:
+                            self._log.warning(f"Error closing old client: {e}")
+                
+                # Create new client with new port
+                client_str = self.port+"("+str(self.baudrate)+")"
+                
+                # Check if a client for this port+baudrate already exists
+                with self._clients_lock:
+                    if client_str in modbus_base.clients:
+                        self.client = modbus_base.clients[client_str]
+                    else:
+                        # Create new client
+                        init_signature = inspect.signature(ModbusSerialClient.__init__)
+                        self._log.debug(f"Creating new client with baud rate: {self.baudrate}")
+                        
+                        if "method" in init_signature.parameters:
+                            self.client = ModbusSerialClient(method="rtu", port=self.port,
+                                                        baudrate=int(self.baudrate),
+                                                        stopbits=1, parity="N", bytesize=8, timeout=2
+                                                        )
+                        else:
+                            self.client = ModbusSerialClient(
+                                            port=self.port,
+                                            baudrate=int(self.baudrate),
+                                            stopbits=1, parity="N", bytesize=8, timeout=2
+                                            )
+                        
+                        modbus_base.clients[client_str] = self.client
+                        self._log.info(f"Created new client for port {self.port}")
+            elif new_port is None:
+                # Port not found - device may be disconnected
+                self._log.warning(f"USB device with specification '{self.port_spec}' not found, keeping existing port {self.port}")
+            elif new_port == old_port:
+                # Port unchanged
+                self._log.debug(f"USB port unchanged: {self.port}")
+        
         self.connected = self.client.connect()
         self._log.info(f"Modbus rtu connected: {self.connected} for {self.transport_name} on port {self.port}")
         if not self.connected:

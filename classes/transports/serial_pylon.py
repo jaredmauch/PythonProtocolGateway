@@ -60,11 +60,14 @@ class serial_pylon(transport_base):
     def __init__(self, settings : "SectionProxy", protocolSettings : "protocol_settings" = None):
         super().__init__(settings)
         '''address is required to be specified '''
-        self.port = settings.get("port", "")
-        if not self.port:
+        # Store the original port specification from config (may be serial number format)
+        self.port_spec = settings.get("port", "")
+        if not self.port_spec:
             raise ValueError("Port is not set")
 
-        self.port = find_usb_serial_port(self.port)
+        self.port = find_usb_serial_port(self.port_spec)
+        if not self.port:
+            raise ValueError("Port is not valid / not found")
         print("Serial Port : " + self.port + " = "+get_usb_serial_port_info(self.port)) #print for config convience
 
         self.baudrate = settings.getint("baudrate", 9600)
@@ -85,6 +88,37 @@ class serial_pylon(transport_base):
         pass
 
     def connect(self):
+        # If not connected or during reconnection, try to re-resolve USB port
+        # This handles cases where USB device disconnects and reconnects with a different port name
+        if not self.connected or getattr(self, '_needs_reconnection', False):
+            old_port = self.port
+            # Re-resolve port from serial number specification
+            new_port = find_usb_serial_port(self.port_spec)
+            if new_port and new_port != old_port:
+                self._log.info(f"USB port changed from {old_port} to {new_port}, updating client")
+                self.port = new_port
+                
+                # Close old client if it exists
+                try:
+                    if hasattr(self.client, 'client') and hasattr(self.client.client, 'close'):
+                        self.client.client.close()
+                except Exception as e:
+                    self._log.warning(f"Error closing old client: {e}")
+                
+                # Create new client with new port
+                self.client = serial_frame_client(self.port,
+                                                  self.baudrate,
+                                                  self.SOI,
+                                                  self.EOI,
+                                                  bytesize=8, parity=serial.PARITY_NONE, stopbits=1, exclusive=True)
+                self._log.info(f"Created new client for port {self.port}")
+            elif new_port is None:
+                # Port not found - device may be disconnected
+                self._log.warning(f"USB device with specification '{self.port_spec}' not found, keeping existing port {self.port}")
+            elif new_port == old_port:
+                # Port unchanged
+                self._log.debug(f"USB port unchanged: {self.port}")
+        
         self.client.connect()
         #3.1 Get protocol version
         if self.VER == b"\x00":
