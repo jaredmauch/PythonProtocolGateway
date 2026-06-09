@@ -283,10 +283,11 @@ class modbus_base(transport_base):
         tracker = self._get_or_create_failure_tracker(register_range, registry_type)
         should_disable = tracker.record_failure(self.max_failures_before_disable, self.disable_duration_hours)
         
+        range_end = register_range[0] + register_range[1] - 1
         if should_disable:
-            self._log.warning(f"Register range {registry_type.name} {register_range[0]}-{register_range[1]} disabled for {self.disable_duration_hours} hours after {tracker.failure_count} failures")
+            self._log.warning(f"Register range {registry_type.name} {register_range[0]}-{range_end} disabled for {self.disable_duration_hours} hours after {tracker.failure_count} failures")
         else:
-            self._log.warning(f"Register range {registry_type.name} {register_range[0]}-{register_range[1]} failed ({tracker.failure_count}/{self.max_failures_before_disable} attempts)")
+            self._log.warning(f"Register range {registry_type.name} {register_range[0]}-{range_end} failed ({tracker.failure_count}/{self.max_failures_before_disable} attempts)")
         
         return should_disable
     
@@ -462,19 +463,25 @@ class modbus_base(transport_base):
             self._log.info(f"Transport {self.transport_name} cleanup completed")
 
     def read_serial_number(self) -> str:
+        serial_number = ""
+
         # First try to read "Serial Number" from input registers (for protocols like EG4 v58)
         self._log.info("Looking for serial_number variable in input registers...")
-        serial_number = str(self.read_variable("Serial Number", Registry_Type.INPUT))
-        self._log.info("read SN from input registers: " + serial_number)
-        if serial_number and serial_number != "None":
-            return serial_number
+        input_sn = self.read_variable("Serial Number", Registry_Type.INPUT)
+        if input_sn is not None:
+            serial_number = str(input_sn)
+            self._log.info("read SN from input registers: " + serial_number)
+            if serial_number:
+                return serial_number
 
         # Then try holding registers (for other protocols)
         self._log.info("Looking for serial_number variable in holding registers...")
-        serial_number = str(self.read_variable("Serial Number", Registry_Type.HOLDING))
-        self._log.info("read SN from holding registers: " + serial_number)
-        if serial_number and serial_number != "None":
-            return serial_number
+        holding_sn = self.read_variable("Serial Number", Registry_Type.HOLDING)
+        if holding_sn is not None:
+            serial_number = str(holding_sn)
+            self._log.info("read SN from holding registers: " + serial_number)
+            if serial_number:
+                return serial_number
 
         sn2 = ""
         sn3 = ""
@@ -935,7 +942,9 @@ class modbus_base(transport_base):
 
             registers = self.read_modbus_registers(start=start, end=end, registry_type=registry_type)
             results = self.protocolSettings.process_registery(registers, registry_map)
-            return results[entry.variable_name]
+            return results.get(entry.variable_name)
+
+        return None
 
     def read_modbus_registers(self, ranges : list[tuple] = None, start : int = 0, end : int = None, batch_size : int = None, registry_type : Registry_Type = Registry_Type.INPUT ) -> dict:
         ''' maybe move this to transport_base ?'''
