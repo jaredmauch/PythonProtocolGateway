@@ -4,7 +4,7 @@ import os
 import re
 import time
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -234,6 +234,15 @@ class modbus_base(transport_base):
             return f"{self.host}_{self.port}"
         else:
             return self.transport_name
+
+    def _get_modbus_address(self) -> Optional[int]:
+        """Get the configured Modbus unit/slave address for this transport."""
+        addresses = getattr(self, 'addresses', None)
+        if addresses:
+            return addresses[0]
+        if hasattr(self, 'address'):
+            return self.address
+        return None
     
     def _get_port_lock(self) -> threading.Lock:
         """Get or create a lock for this transport's port"""
@@ -405,8 +414,11 @@ class modbus_base(transport_base):
         """Connect to the Modbus device"""
         # Add debugging information
         port_info = getattr(self, 'port', 'unknown')
-        address_info = getattr(self, 'address', 'unknown')
-        self._log.info(f"Connecting to Modbus device: address={address_info}, port={port_info}")
+        address_info = self._get_modbus_address()
+        if address_info is None:
+            self._log.info(f"Connecting to Modbus device: port={port_info}")
+        else:
+            self._log.info(f"Connecting to Modbus device: address={address_info}, port={port_info}")
         
         # Handle first connection or reconnection
         if self.first_connect:
@@ -568,8 +580,11 @@ class modbus_base(transport_base):
         with self._transport_lock:
             # Add debugging information
             port_info = getattr(self, 'port', 'unknown')
-            address_info = getattr(self, 'address', 'unknown')
-            self._log.debug(f"Reading data from {self.transport_name}: address={address_info}, port={port_info}")
+            address_info = self._get_modbus_address()
+            if address_info is None:
+                self._log.debug(f"Reading data from {self.transport_name}: port={port_info}")
+            else:
+                self._log.debug(f"Reading data from {self.transport_name}: address={address_info}, port={port_info}")
             
             info = {}
             #modbus - only read input/holding registries
