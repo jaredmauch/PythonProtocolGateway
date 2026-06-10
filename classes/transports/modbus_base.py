@@ -1028,6 +1028,10 @@ class modbus_base(transport_base):
                 # Treat all ModbusIOException as retryable errors
                 isError = True
 
+            except OSError as e:
+                self._log.error(f"Serial I/O error for {self.transport_name}: " + str(e))
+                isError = True
+
 
             if register is None or isinstance(register, bytes) or (hasattr(register, 'isError') and register.isError()) or isError: #sometimes weird errors are handled incorrectly and response is a ascii error string
                 if register is None:

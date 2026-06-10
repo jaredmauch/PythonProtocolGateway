@@ -288,6 +288,11 @@ class Protocol_Gateway:
             
             self._mark_read_complete(transport)
                 
+        except OSError as err:
+            self.__log.error(f"Serial I/O error on transport {transport.transport_name}: {err}")
+            if hasattr(transport, "_handle_communication_error"):
+                transport._handle_communication_error(err)
+            self._mark_read_complete(transport)
         except Exception as err:
             self.__log.error(f"Error processing transport {transport.transport_name}: {err}")
             traceback.print_exc()
