@@ -184,6 +184,7 @@ class modbus_base(transport_base):
         self.analyze_protocol_save_load : bool = False
         self.first_connect : bool = True
         self._needs_reconnection : bool = False
+        self._post_connect_init_pending : bool = False
         
         self.send_holding_register : bool = True
         self.send_input_register : bool = True
@@ -394,6 +395,13 @@ class modbus_base(transport_base):
             tracker.failure_count = 0
         self._log.info(f"Manually enabled register range {registry_type.name} {register_range[0]}-{register_range[1]}")
 
+    def ensure_post_connect_init(self):
+        """Run deferred post-connect setup (serial number read, write validation)."""
+        if not self._post_connect_init_pending:
+            return
+        self._post_connect_init_pending = False
+        self.init_after_connect()
+
     def init_after_connect(self):
         # Use transport lock to prevent concurrent access during initialization
         with self._transport_lock:
@@ -423,7 +431,8 @@ class modbus_base(transport_base):
         # Handle first connection or reconnection
         if self.first_connect:
             self.first_connect = False
-            self.init_after_connect()
+            # Defer serial number read / write validation so startup isn't blocked
+            self._post_connect_init_pending = True
         elif not self.connected:
             # Reconnection case - reinitialize after connection is established
             self._log.info(f"Reconnecting transport {self.transport_name}")
@@ -576,6 +585,8 @@ class modbus_base(transport_base):
             time.sleep(self.modbus_delay) #sleep inbetween requests so modbus can rest
 
     def read_data(self) -> dict[str, str]:
+        self.ensure_post_connect_init()
+
         # Use transport lock to prevent concurrent access to this transport instance
         with self._transport_lock:
             # Add debugging information

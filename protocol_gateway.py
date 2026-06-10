@@ -217,10 +217,18 @@ class Protocol_Gateway:
                 transport.on_message = self.on_message
                 self.__transports.append(transport)
 
-        #connect first
+        # Connect in parallel so one slow/unresponsive transport doesn't block others
+        connect_threads = []
         for transport in self.__transports:
-            self.__log.info("Connecting to "+str(transport.type)+":" +str(transport.transport_name)+"...")
-            transport.connect()
+            thread = threading.Thread(
+                target=self._connect_transport,
+                args=(transport,),
+                name=f"connect-{transport.transport_name}",
+            )
+            thread.start()
+            connect_threads.append(thread)
+        for thread in connect_threads:
+            thread.join()
 
         time.sleep(0.7)
         #apply links
@@ -235,6 +243,15 @@ class Protocol_Gateway:
         for transport in self.__transports:
             if transport.read_interval > 0:
                 self.__read_completion_tracker[transport.transport_name] = False
+
+    def _connect_transport(self, transport: transport_base):
+        """Connect a single transport; used for parallel startup."""
+        try:
+            self.__log.info("Connecting to " + str(transport.type) + ":" + str(transport.transport_name) + "...")
+            transport.connect()
+        except Exception as err:
+            self.__log.error(f"Failed to connect {transport.transport_name}: {err}")
+            traceback.print_exc()
 
     def on_message(self, transport : transport_base, entry : registry_map_entry, data : str):
         ''' message recieved from a transport! '''
